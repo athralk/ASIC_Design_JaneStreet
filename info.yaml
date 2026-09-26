@@ -1,0 +1,50 @@
+# Tiny Tapeout project information
+project:
+  title:        "10BASE-T Ethernet PHY + MAC-lite"
+  author:       ""      # TODO: your name
+  discord:      ""
+  description:  "Half-duplex 10BASE-T transceiver in Hardcaml: Manchester, link pulses, CRC-32, CSMA/CD"
+  language:     "Hardcaml"
+  clock_hz:     60000000
+
+  tiles: "1x1"
+
+  # TODO: make unique with your GitHub username (lib/tt_top.ml `name`).
+  top_module:  "tt_um_eth10t"
+
+  source_files:
+    - "tt_um_eth10t.v"
+
+pinout:
+  # Inputs
+  ui[0]: "TX_D0"
+  ui[1]: "TX_D1"
+  ui[2]: "TX_D2"
+  ui[3]: "TX_D3"
+  ui[4]: "TX_D4"
+  ui[5]: "TX_D5"
+  ui[6]: "TX_D6"
+  ui[7]: "TX_D7"
+
+  # Outputs
+  uo[0]: "RX_D0 / TX_BUSY"
+  uo[1]: "RX_D1 / CARRIER"
+  uo[2]: "RX_D2 / COLLISION"
+  uo[3]: "RX_D3 / JABBER"
+  uo[4]: "RX_D4 / CRC_OK"
+  uo[5]: "RX_D5 / ALIGN_ERR"
+  uo[6]: "RX_D6 / FRAME_TOGGLE"
+  uo[7]: "RX_D7 / LINK_UP"
+
+  # Bidirectional pins
+  uio[0]: "TD+ (out)"
+  uio[1]: "TD- (out)"
+  uio[2]: "RD (in)"
+  uio[3]: "TX_VALID (in)"
+  uio[4]: "TX_READY (out)"
+  uio[5]: "RX_VALID (out)"
+  uio[6]: "RX_FRAME (out)"
+  uio[7]: "LINK_UP (out)"
+
+# Do not change!
+yaml_version: 6

@@ -1,0 +1,5 @@
+(executable
+ (name gen)
+ (libraries eth10t hardcaml core core_unix)
+ (preprocess
+  (pps ppx_jane)))

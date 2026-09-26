@@ -1,0 +1,19 @@
+# OCaml / dune
+_build/
+*.install
+
+# Generated (rebuilt by `make verilog`); src/tt_um_eth10t.v is kept for TinyTapeout CI
+gen/
+
+# FPGA, ASIC and simulation outputs
+fpga/*/build/
+runs/
+src/config_merged.json
+test/sim_build/
+test/results.xml
+test/*.fst
+test/gate_level_netlist.v
+__pycache__/
+
+# TinyTapeout support tools (cloned on demand)
+tt/

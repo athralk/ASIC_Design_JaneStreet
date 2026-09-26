@@ -1,0 +1,6 @@
+(library
+ (name eth10t_test)
+ (libraries eth10t hardcaml hardcaml_waveterm core qcheck-core)
+ (inline_tests)
+ (preprocess
+  (pps ppx_jane ppx_expect ppx_hardcaml)))

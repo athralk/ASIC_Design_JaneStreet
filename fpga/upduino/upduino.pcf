@@ -1,0 +1,8 @@
+# UPduino v3.x. The 12 MHz oscillator reaches pin 35 once the OSC jumper is closed.
+set_io clk_12m 35
+set_io td_p 2
+set_io td_n 3
+set_io rd 4
+set_io led_green 39
+set_io led_blue 40
+set_io led_red 41

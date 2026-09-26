@@ -1,0 +1,8 @@
+# k-induction proof of the properties in props.sv, using yosys' built-in SAT solver.
+read_verilog gen/tt_um_eth10t_rd_fall.v
+read_verilog -formal -sv -DP_BASIC -DP_READY -DP_PULSE formal/props.sv
+prep -top props -flatten
+memory_map
+opt -fast
+async2sync
+sat -tempinduct -prove-asserts -set-assumes -set-init-zero -seq 1 -set-at 1 rst_n 0 -maxsteps 16
