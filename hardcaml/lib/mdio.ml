@@ -1,5 +1,5 @@
 (* MDIO master for the PHY: writes the configuration once after [start], then keeps
-   reading back a few registers so the board can show what the PHY really holds.
+   reading back the PHY ID and status so the board can show what the PHY really does.
 
    Every access is a 64-bit frame, sent MSB first:
      32 x 1 (preamble) | 01 (start) | OP | PHYAD | REGAD | TA | DATA (16)
@@ -28,20 +28,21 @@ module O = struct
     ; mdio_oe : 'a
     ; done_ : 'a (* configuration writes sent *)
     ; id_ok : 'a (* PHY identifier 1 reads 0x2000 (TI DP83848) *)
-    ; anar_ok : 'a (* our advertisement (10BASE-T half duplex only) reads back *)
-    ; link : 'a (* PHY reports link up *)
-    ; phy_drove : 'a (* the PHY ever drove MDIO low during a read *)
+    ; link : 'a (* PHYSTS: link up *)
+    ; speed_10 : 'a (* PHYSTS: link is 10 Mb/s *)
+    ; full_duplex : 'a (* PHYSTS: full duplex *)
     }
   [@@deriving hardcaml]
 end
 
-(* DP83848 on the Arty A7. ANAR = 10BASE-T half duplex only; BMCR = auto-negotiation
-   enabled and restarted. *)
+(* DP83848 on the Arty A7. ANAR = 10BASE-T half and full duplex only; BMCR =
+   auto-negotiation enabled and restarted. *)
 let phy_address = 1
-let anar = 0x0021
+let anar = 0x0061
 let writes = [ 4, anar; 0, 0x1200 ]
 let phy_id1 = 0x2000
-let reads = [ 2; 4; 1 ] (* PHY identifier 1, ANAR, BMSR *)
+let physts = 0x10
+let reads = [ 2; physts ] (* PHY identifier 1, PHY status *)
 
 let bits n v = List.init n ~f:(fun k -> (v lsr (n - 1 - k)) land 1 = 1)
 
@@ -65,8 +66,8 @@ let read_stream = List.concat_map reads ~f:(fun reg -> frame ~read:true ~reg ~da
 (* Bits we drive during the write frames only; used by the tests. *)
 let stream = List.map write_stream ~f:fst
 
-(* MDC = clock / 2^divider_bits (60 MHz / 32 = 1.875 MHz, below the 25 MHz limit). *)
-let create ?(divider_bits = 5) (i : _ I.t) =
+(* MDC = clock / 2^divider_bits (25 MHz / 16 = 1.56 MHz, below the 25 MHz limit). *)
+let create ?(divider_bits = 4) (i : _ I.t) =
   let open Always in
   let spec = Reg_spec.create ~clock:i.clock ~clear:i.clear () in
   let nr = Reg_spec.create ~clock:i.clock () in
@@ -91,7 +92,6 @@ let create ?(divider_bits = 5) (i : _ I.t) =
   let shift = Variable.reg nr ~width:16 in
   let results = List.map reads ~f:(fun _ -> Variable.reg spec ~width:16) in
   let which = uresize (srl (index.value -:. first_read) 6) 2 in
-  let phy_drove = Variable.reg spec ~width:1 in
   compile
     ([ if_
          busy.value
@@ -107,9 +107,7 @@ let create ?(divider_bits = 5) (i : _ I.t) =
          [ div <--. 0; when_ (i.start &: ~:(done_.value)) [ busy <--. 1; index <--. 0 ] ]
      ; when_
          (sample_now &: data_bit)
-         [ shift <-- (sel_bottom shift.value 15 @: mdio_in)
-         ; when_ ~:mdio_in [ phy_drove <--. 1 ]
-         ]
+         [ shift <-- (sel_bottom shift.value 15 @: mdio_in) ]
      ]
      @ List.mapi results ~f:(fun k r ->
        when_
@@ -124,8 +122,8 @@ let create ?(divider_bits = 5) (i : _ I.t) =
   ; mdio_oe = reg nr (busy.value &: drive_en)
   ; done_ = done_.value
   ; id_ok = result 2 ==:. phy_id1
-  ; anar_ok = sel_bottom (result 4) 10 ==:. anar
-  ; link = bit (result 1) 2
-  ; phy_drove = phy_drove.value
+  ; link = bit (result physts) 0
+  ; speed_10 = bit (result physts) 1
+  ; full_duplex = bit (result physts) 2
   }
 ;;
