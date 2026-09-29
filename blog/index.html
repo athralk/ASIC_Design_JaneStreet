@@ -1,0 +1,221 @@
+<html>
+    <header>10Mbps ethernet with TinyTapeout format</header>
+    <br>
+    <body>
+        <h1>1. What is ethernet, what is 10-base-t speed</h1>
+        Ethernet was developed for fast communication of data. 10 Base-t is the 10Mbps version that was created.
+        <br>
+        Here I built a half duplex 10mbps ethernet ASIC and ran it on the Arty A7 FPGA.
+        It has its own PHY, has MAC-lite and a manchester encoder. Also supports 802.3 jitter specs, link pulsse and CSMA/CD and CRC-32.
+        
+        <h2>1.1 Half Duplex</h2>
+        Half duplex here means that in the ethernet, data can move in both direction but only one at a time. This is different from full duplex where data can move both ways at the same time.
+        <br><br>
+        <b>WHY half duplex? </b> Even though the industry standard is full duplex i used half duplex to reduce silicon area count and the requires lesser buffer registers since data is only flowing in 1 direction
+        Also full duplex does not need concepts like CSMA/CD because data is almost "systolic". Collisions are impossible since data flows in both directions in their own lanes.
+
+        <br> 
+        <h2>1.2 MAC</h2>
+        MAC can stand for MAC address which is a 48 bit address for all unique Ethernet port addresses it looks like:
+        <br><img src="images\MAC_Address.jpg">
+
+        <br>However, the mac we are talking about is the hardware control layer. it sits at the second layer at data link in OSI model and handles data communication.
+        <li>prepares data for transmission by adding a preamble, source and desitnation address and padding</li>
+        <li> Manages link sharing via Carrier Sense Multiple Access with Collision Detection (CSMA/CD) in half-duplex or full-duplex flow control.</li>
+
+        <h2>1.3 CSMA/CD</h2>
+        This stands for <b>Carrier Sense Media Access with Collision detection.</b>
+        <li>Carrier sense: this is a device that listens to the network medium before sending data to check if it is idle or not. if it is not idle then it waits before sending data.</li>
+        <li>Multiple Access: multiple devices have access to the data and have equal rights to access it when it is free.</li>
+        <li>Collision detection: A collision is what happens when data is sent from 2 sides at the same time. If 2 devices send data at the same time then we call it a collision and the signals get corruptde.</li>
+        <br>
+        This is a feature used in legacy half duplex netowrks for managing shared communication and to coordinate data transmission.
+
+        <h2> The PHY layer</h2>
+        The Ethernet PHY (Physical Layer) is the hardware transceiver that translates digital data from an FPGA's Media Access Controller (MAC) <br> 
+        into analog electrical or optical signals for transmission over a cable, and vice versa.
+
+        <li> it also handles encoding like 45B or manchester encoding to ensure reliable clock synchronisation and DC signal.</li>
+        <li> Clock and Data Recovery (CDR): Extracts the clock signal from the incoming serial data stream at the receiver end.</li>
+
+        <h2>1.5 Manchester encoding</h2>
+        At 10Mbps one bit lasts 100ns. In manchester encoding every bit is split into two halves of 50ns and there is <b>always a transition in the middle of the bit</b>.
+        <li>1: first half low, second half high (rising edge in the middle)</li>
+        <li>0: first half high, second half low (falling edge in the middle)</li>
+        <br>
+        Since every bit has an edge the receiver can pull the clock out of the data itself, so no separate clock wire is needed. The cost is that the line switches at 20MHz to carry 10Mbps of data.
+        <br>
+        The signal is sent on one twisted pair (TD+ and TD-) and received on another (RD+ and RD-). Idle means no voltage across the pair.
+
+        <h2>1.6 The ethernet frame</h2>
+        Data is not just thrown on the cable, it is wrapped in a frame:
+        <pre>
+| preamble 7 x 0x55 | SFD 0xD5 | dest 6 | src 6 | type 2 | payload 46..1500 | FCS 4 |
+        </pre>
+        <li>Preamble: 1010101010... on the wire. It gives the receiver time to lock onto the clock.</li>
+        <li>SFD (start frame delimiter): ends in 11 instead of 10, which tells the receiver "data starts now".</li>
+        <li>Destination and source are the 48 bit MAC addresses from 1.2.</li>
+        <li>Type: says what is inside the frame.</li>
+        <li>The frame has to be at least 64 bytes, so if the data is shorter it gets padded with zeros up to 60 bytes (plus 4 bytes FCS).</li>
+        <li>FCS (frame check sequence): a CRC-32 of everything before it.</li>
+        <li>Bytes are sent LSB first.</li>
+        <br>
+        After the frame 10Base-t holds the line high for 250ns (called TP_IDL) and then goes idle.
+
+        <h2>1.7 CRC-32</h2>
+        CRC is a checksum that catches corrupted frames. The sender runs every bit through a 32 bit shift register with XOR feedback (polynomial 0x04C11DB7, used bit reversed as 0xEDB88320) and sends the inverted result at the end of the frame.
+        <br><br>
+        <b>The neat trick:</b> if the receiver runs the same CRC over the data <i>and</i> the FCS, a good frame always ends with the same constant 0xDEBB20E3 (called the residue). So the receiver does not need to know where the frame ends, it just checks if the register equals the residue.
+
+        <h2>1.8 Link pulses</h2>
+        When nothing is being sent, a 10Base-t device sends a single 100ns pulse every 16ms. This is called a Normal Link Pulse (NLP). If the other side sees no pulses or frames for 50-150ms it says the link is down.
+        <br>
+        Modern laptops try to auto-negotiate with bursts of fast pulses, but when they only see NLPs they fall back to 10Mbps half duplex. This is called parallel detection and this is how my chip would link with a normal PC.
+
+        <h2>1.9 Jitter</h2>
+        Edges do not arrive exactly on time. The 802.3 standard allows every edge to be off by up to &plusmn;13.5ns. That is a lot when a half bit is only 50ns. A receiver that just trusts every edge sees up to 27ns of error between 2 edges, so the receiver has to be smarter (see 4).
+
+        <br>
+        <h1>2. The chip</h1>
+        I wrote the design in <b>Hardcaml</b>, which is Jane Street's hardware description library in OCaml. You describe the circuit in OCaml, simulate it in OCaml, and it generates the Verilog for you. I wrote no Verilog by hand for the chip.
+        <br><br>
+        The chip runs at 60MHz and is split into these parts:
+        <li>tx.ml: the transmitter, a state machine and the manchester encoder. Also link pulses, collision detection and jabber.</li>
+        <li>rx.ml: the receiver, a digital PLL that decodes manchester and the receive MAC.</li>
+        <li>crc32.ml: one CRC-32 engine.</li>
+        <li>eth_core.ml: connects TX, RX and the CRC, and has the link timer and a status byte.</li>
+        <li>tt_top.ml: maps everything to the TinyTapeout pins.</li>
+        <br>
+        <b>Why only one CRC engine?</b> In half duplex we never send and receive a good frame at the same time. So TX uses the CRC when it is busy and RX uses it the rest of the time. That saves 32 flip flops and all their XOR gates.
+
+        <h2>2.1 Pins</h2>
+        TinyTapeout gives every design the same 26 pins. I used them like this:
+        <li>ui_in[7:0]: the byte to send</li>
+        <li>uo_out[7:0]: the received byte during a frame, otherwise a status byte (link up, CRC ok, collision, etc.)</li>
+        <li>uio[0], uio[1]: TD+ and TD-</li>
+        <li>uio[2]: RD, the output of a comparator on the receive pair</li>
+        <li>uio[3]: TX_VALID, uio[4]: TX_READY, uio[5]: RX_VALID, uio[6]: RX_FRAME, uio[7]: LINK_UP</li>
+        <br>
+        The only parts outside the chip are the RJ45 jack with its transformer and one comparator.
+
+        <br>
+        <h1>3. Sending a frame</h1>
+        The host puts a byte on ui_in and raises TX_VALID. Every time TX_READY rises the chip has taken the byte and the host puts the next one. When the host drops TX_VALID the chip pads the frame and adds the CRC on its own.
+        <br><br>
+        Inside, TX is a state machine:
+        <pre>
+Idle -> Preamble -> Data -> (Pad) -> Fcs -> Eof -> Idle
+         any of these -> Jam (on collision)
+Idle -> Nlp (every 16ms when nothing is sent)
+        </pre>
+        <li>A counter counts 6 clocks per bit (6 x 16.7ns = 100ns). For the first 3 clocks it sends the inverted bit and for the next 3 the bit itself. That is the whole manchester encoder.</li>
+        <li>Before starting it waits until the line has been quiet for 9.6us (the inter packet gap). This is the carrier sense part of CSMA/CD.</li>
+        <li>If it hears something on RD while it is sending, that is a collision. It sends a 32 bit jam pattern and stops. The host then waits a random time and tries again (backoff).</li>
+        <li>Jabber: if something goes wrong and it keeps sending for more than ~34ms it cuts itself off.</li>
+        <li>TD+ and TD- come straight out of flip flops so there are no glitches on the line.</li>
+
+        <br>
+        <h1>4. Receiving a frame</h1>
+        This was the hardest part. The receiver has to find the middle-of-bit edges even with jitter, with its own clock that is not exactly the same as the sender's.
+
+        <h2>4.1 Sampling on both edges</h2>
+        RD is sampled on the rising <b>and</b> the falling edge of the clock. That gives 12 samples per bit (every 8.3ns) instead of 6 without needing a faster clock.
+
+        <h2>4.2 Digital PLL</h2>
+        <li>The receiver keeps a "phase" that says where in the bit it thinks it is. It is stored one-hot in a 12 bit ring, so checking "are we in slot k" is just 1 bit.</li>
+        <li>The first edge on an idle line starts the phase.</li>
+        <li>After that, every edge near the expected middle of the bit votes "early" or "late". Only when enough votes add up does the phase move by one slot. So it follows the <b>average</b> edge position and not every jittery edge.</li>
+        <li>In the first few bits it moves after every vote so it locks quickly in the preamble.</li>
+        <li>Edges near the bit boundary are ignored since they carry no data.</li>
+        <li>The bit value is just the direction of the middle edge: rising = 1, falling = 0.</li>
+        <li>Two bits in a row with no middle edge means the frame is over.</li>
+
+        <h2>4.3 Receive MAC</h2>
+        After the PLL it is simple. Wait for the SFD (the 11), shift bits into bytes, send each byte out on uo_out and run it through the CRC. At the end of the frame the status byte shows CRC_OK if the register holds the residue 0xDEBB20E3.
+        <br>
+        The link timer is also here: every link pulse or frame sets LINK_UP and after ~69ms of silence it drops.
+
+        <br>
+        <h1>5. Testing it</h1>
+        I tested the chip a lot before hardening because you can not fix silicon after.
+        <li><b>Reference model:</b> a separate pure OCaml model that builds the exact bits a frame should have on the wire. TX is checked bit for bit against it, so a CRC bug can not pass by agreeing with itself.</li>
+        <li><b>Two chips on a cable:</b> a simulation with two chips with different clocks (a few ppm apart), a cable with delay and random jitter, and a host model. Tested CRC errors, collisions, deference and the link going up and down.</li>
+        <li><b>Constrained random:</b> random frame lengths, clock offsets, jitter and traffic from both sides, checked against the model until every coverage bin was hit. 36 scenarios, 152 frames, 0 mismatches.</li>
+        <li><b>Jitter sweep:</b> every frame is received up to the &plusmn;13.5ns spec limit. At 15ns it still gets 89 out of 96, so it gets worse slowly instead of just breaking.</li>
+        <li><b>Formal proofs:</b> using yosys k-induction I proved 4 properties for all time, for example TD+ and TD- are never both on and no pulse shorter than 50ns ever reaches the line.</li>
+        <li><b>Gate level:</b> cocotb tests on the final netlist after layout, 4/4 pass.</li>
+        <br>
+        Bugs this found: the pad counter wrapped at 64, the jabber cut-off could make a short pulse (found by formal), and the PLL could apply one correction twice.
+
+        <br>
+        <h1>6. TinyTapeout GDS</h1>
+        TinyTapeout lets you put a small design on a shared chip. I hardened it with OpenLane 2 on the sky130 process into a 1x1 tile (161 x 111.52 um).
+        <li>1191 cells, 193 flip flops, 10401 um&sup2; of cell area</li>
+        <li>Setup slack +4.95ns at 60MHz on the worst corner, so it could run at around 85MHz</li>
+        <li>DRC 0, LVS 0, antenna 0</li>
+        <li>0.96mW power</li>
+        <br>
+        60MHz is enough because I need 12 samples per bit for the jitter tolerance and the double edge sampling gives me that.
+
+        <br>
+        <h1>7. UPduino</h1>
+        I also built it for the UPduino v3 (iCE40 FPGA). The iCE40 is slow so getting 60MHz took some work: the one-hot phase, deciding state machine transitions one clock early, and registering the CRC controls. It reached 60.35MHz with 327 LUTs. It builds but I have <b>not tested it on the board</b> yet since it needs a jack and comparator wired up.
+
+        <br>
+        <h1>8. Arty A7: real frames on a real PC</h1>
+        The Arty A7 has its own RJ45 port, but the jack is not connected to the FPGA directly. It goes through a <b>PHY chip</b> (TI DP83848) which does the manchester encoding, link pulses and clock recovery itself. So on the Arty my chip's PHY part is not used, the FPGA only has to be the MAC. It still uses the same CRC module and the same frame format as the chip.
+
+        <h2>8.1 MII</h2>
+        The FPGA talks to the PHY chip over <b>MII</b>:
+        <li>TX_CLK and RX_CLK: clocks from the PHY. 2.5MHz at 10Mbps and 25MHz at 100Mbps.</li>
+        <li>TXD[3:0] and TX_EN: 4 bits (a nibble) per clock going out</li>
+        <li>RXD[3:0] and RX_DV: a nibble per clock coming in</li>
+        <li>CRS: carrier sense, someone is talking on the cable</li>
+        <li>MDC and MDIO: a slow 2 wire bus to read and write the PHY's registers</li>
+
+        <h2>8.2 The first version failed</h2>
+        My first try kept the chip in the middle. A bridge converted the nibbles into manchester, fed it to my chip, and converted back. It ran on a 60MHz clock and <b>sampled</b> TX_CLK and RX_CLK like normal data.
+        <br><br>
+        It did not work. Nothing showed up in Wireshark and nothing was received. The reason:
+        <li>Windows linked at 100Mbps, where TX_CLK and RX_CLK are 25MHz. You can not follow a 25MHz clock by sampling it at 60MHz.</li>
+        <li>It only could have worked if my MDIO write forcing 10Mbps worked, and there was no way to see on the board if it did.</li>
+        <li>Three conversions were based on how I <i>thought</i> the PHY behaves, and none of them could be seen on the board.</li>
+        <br>
+        <b>Lesson:</b> in MII, TX_CLK and RX_CLK <b>are</b> the clocks. That should have been caught at design time, not on hardware.
+
+        <h2>8.3 The second version</h2>
+        I rewrote it as a proper MII MAC:
+        <li>TX runs on TX_CLK. It sends 16 preamble nibbles (fifteen 0x5 and then 0xD), 120 data nibbles low nibble first, 8 CRC nibbles and then a gap. It waits while CRS is high.</li>
+        <li>RX runs on RX_CLK. It skips the preamble until 0xD, runs every nibble through the CRC, and when RX_DV drops the frame is good if the CRC equals the residue.</li>
+        <li>In 10Mbps half duplex the PHY copies what we send back onto RXD. So if the source address is ours, it is our own echo and not a frame from the PC.</li>
+        <li>MDIO sets the PHY to advertise 10Mbps only, then keeps reading the link status, speed and duplex back and shows them on the LEDs. So if MDIO fails I can see it.</li>
+        <li>The three clocks (25MHz system clock, TX_CLK, RX_CLK) pass signals to each other through toggles and 2 flip flop synchronisers.</li>
+        <li>Since the logic runs on the PHY's clocks it works at 10 or 100Mbps.</li>
+        <br>
+        Every second or so it sends this frame:
+        <li>Destination: ff:ff:ff:ff:ff:ff (broadcast)</li>
+        <li>Source: 02:48:43:31:30:54 (the bytes spell "HC10T")</li>
+        <li>Type: 0x88B5 (local experimental)</li>
+        <li>Payload: "Hello from Hardcaml 10BASE-T #" and a number that goes up every frame</li>
+        <br>
+        Vivado met timing (WNS +6.845ns) and it used 336 LUTs and 311 flip flops.
+
+        <h2>8.4 It works</h2>
+        First try only LD4 was blinking. Turns out the ethernet cable was not pushed in all the way into the laptop. After pushing it in, Wireshark showed:
+        <pre>
+28    27.082061400    02:48:43:31:30:54    Broadcast    0x88b5    60    Local Experimental Ethertype 1
+        </pre>
+        with "Hello from Hardcaml 10BASE-T #" in the payload and the number going up every frame.
+        <li>Wireshark shows 60 bytes and not 64 because the network card checks and removes the 4 CRC bytes. A frame with a wrong CRC gets dropped, so seeing it at all means my CRC is right.</li>
+        <li>LD5 blinks when the laptop sends its own broadcasts, so the FPGA is receiving and checking real frames too.</li>
+        <li>LD6 and LD7 are on: link is up and it is 10Mbps, read from the PHY over MDIO.</li>
+        <li>Windows also shows the adapter as Up at 10 Mbps.</li>
+
+        <br>
+        <h1>9. What is left</h1>
+        <li>The Arty proves the frame format, padding and CRC on real hardware, but not my manchester encoder and PLL, because the PHY chip does that part there.</li>
+        <li>To test those on hardware I need to wire a jack and comparator to the UPduino, or get the TinyTapeout chip back.</li>
+        <li>The chip does not do full duplex, auto-negotiation or address filtering, and the backoff is done by the host.</li>
+
+    </body>
+</html>
